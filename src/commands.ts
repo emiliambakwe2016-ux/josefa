@@ -1,0 +1,87 @@
+import { Editor } from '@tiptap/core';
+import { closeHistory } from '@tiptap/pm/history';
+import { matchKey } from './editor';
+export interface Range {from:number;to:number;label?:string;}
+export interface Result {message:string;pending?:()=>Result;matches?:Range[];}
+const nums:Record<string,number>={first:1,second:2,third:3,fourth:4,fifth:5,sixth:6,seventh:7,eighth:8,ninth:9,tenth:10,last:-1,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,sixteen:16,eighteen:18,twenty:20,'twenty four':24,'thirty six':36};
+const number=(s:string)=>nums[s]??Number(s.replace(/(st|nd|rd|th)$/,''));
+const norm=(s:string)=>s.toLowerCase().replace(/[‘’]/g,"'").replace(/\s+/g,' ').trim();
+const clean=(s:string)=>s.trim().replace(/^["“']|["”'.]$/g,'');
+export class CommandEngine {
+ matches:Range[]=[]; index=0; previous:Range|null=null; clipboard:any=null; lastText='';
+ constructor(public editor:Editor){}
+ blocks(type?:string){const a:Range[]=[];this.editor.state.doc.descendants((n,p)=>{if(n.isTextblock&&(!type||n.type.name===type))a.push({from:p+1,to:p+n.nodeSize-1,label:n.textContent});});return a;}
+ markMatches(){this.editor.view.dispatch(this.editor.state.tr.setMeta(matchKey,this.matches));}
+ select(r:Range){const s=this.editor.state.selection;this.previous={from:s.from,to:s.to};this.editor.commands.setTextSelection({from:r.from,to:r.to});this.editor.commands.scrollIntoView();this.editor.view.focus();return r;}
+ show(index:number){if(!this.matches.length)throw Error('There are no search results. Find some text first.');this.index=(index+this.matches.length)%this.matches.length;this.select(this.matches[this.index]);this.markMatches();return {message:`Match ${this.index+1} of ${this.matches.length}.`,matches:this.matches};}
+ find(phrase:string,all=false):Result {
+ phrase=clean(phrase.replace(/^(?:the )?(?:words?|phrase)\s+/i,''));if(!phrase)throw Error('Please say which words to find.');const q=norm(phrase);this.matches=[];this.index=0;
+ for(const b of this.blocks()){const text=this.editor.state.doc.textBetween(b.from,b.to,'');const lower=text.toLowerCase().replace(/[‘’]/g,"'");let start=0;while(start<=lower.length){let i=lower.indexOf(q,start);if(i<0)break;this.matches.push({from:b.from+i,to:b.from+i+q.length,label:text});start=i+Math.max(1,q.length);}}
+ let approximate=false;
+ if(!this.matches.length){const words=q.replace(/^(where i (?:discussed|mentioned|wrote about)|the paragraph (?:about|on))\s+/,'').match(/[a-z0-9]+/g)?.filter(w=>!['the','a','an','of','and','to','in','is','was','i','about','where','my'].includes(w))||[];
+ const scores=this.blocks().map(b=>{const t=norm(b.label||'');return {b,score:words.length?words.filter(w=>t.includes(w)).length/words.length:0};}).filter(x=>x.score>=0.5).sort((a,b)=>b.score-a.score);this.matches=scores.slice(0,12).map(x=>x.b);approximate=true;}
+ this.markMatches();if(!this.matches.length)throw Error(`No match for “${phrase}”. Try a shorter phrase.`);
+ if(approximate)return {message:`${this.matches.length} possible passage${this.matches.length===1?'':'s'} from keyword matching. Choose a result before editing.`,matches:this.matches};
+ this.show(0);return {message:all?`${this.matches.length} matches. Choose a result or say “Next result”.`:`${this.matches.length===1?'Found':`Match 1 of ${this.matches.length}:`} “${phrase}”.`,matches:this.matches};
+ }
+ target(raw:string):Range {
+ let t=clean(raw).toLowerCase().replace(/^(?:the|a)\s+/,'');const s=this.editor.state.selection;
+ if(/^(it|this|that|selected text|selection|selected sentence|selected paragraph|this paragraph|that heading|current paragraph|heading|title|paragraph|selected heading)$/.test(t)||!t){
+ if(t==='title'){const h=this.blocks('heading')[0];if(h)return h;}
+ if(!s.empty)return {from:s.from,to:s.to};
+ if(/paragraph|heading/.test(t)){const a=this.blocks(t.includes('heading')?'heading':undefined).find(b=>s.from>=b.from&&s.from<=b.to);if(a)return a;}
+ throw Error('Select or find the text first so I know what to change.');}
+ let m=/^(?:(\w+|\d+(?:st|nd|rd|th)?) (paragraph|heading|sentence)|(paragraph|heading|sentence) (\w+|\d+))$/.exec(t);
+ if(m){const kind=m[2]||m[3],n=number(m[1]||m[4]);let bs=this.blocks(kind==='heading'?'heading':kind==='paragraph'?'paragraph':undefined);if(kind==='sentence')bs=bs.flatMap(b=>{const text=this.editor.state.doc.textBetween(b.from,b.to,'');return Array.from(text.matchAll(/[^.!?]+(?:[.!?]+|$)/g)).map(x=>({from:b.from+x.index!,to:b.from+x.index!+x[0].length,label:x[0]}));});const b=bs[n===-1?bs.length-1:n-1];if(!b)throw Error(`That ${kind} does not exist.`);return b;}
+ m=/^(?:paragraph|heading) beginning (?:with )?(.+)$/.exec(t);if(m){const list=this.blocks(t.startsWith('heading')?'heading':undefined).filter(b=>norm(b.label||'').startsWith(norm(m![1])));if(list.length!==1)throw Error(list.length?'Several passages begin that way. Use Find to choose one.':'No passage begins with those words.');return list[0];}
+ const r=this.find(clean(raw));if(this.matches.length!==1||r.message.includes('possible'))throw Error('Several or approximate matches: choose the intended passage, then say “Make it bold” or another action.');return this.matches[0];
+ }
+ format(operation:string,target:string):Result {
+ const r=this.target(target);this.select(r);const e=this.editor;let ok=false;
+ if(operation==='bold')ok=e.commands.setBold();if(operation==='italic')ok=e.commands.setItalic();if(operation==='underline')ok=e.commands.setUnderline();if(operation==='strike')ok=e.commands.setStrike();if(operation==='highlight')ok=e.commands.setHighlight({color:'#fff0a3'});
+ if(operation==='uppercase'){const text=e.state.doc.textBetween(r.from,r.to,'\n');if(!text)throw Error('No text selected.');ok=e.commands.insertContentAt(r,text.toUpperCase().replace(/&/g,'&amp;').replace(/</g,'&lt;'));e.commands.setTextSelection({from:r.from,to:r.from+text.length});}
+ if(!ok)throw Error('That formatting could not be applied here.');return {message:`Applied ${operation}.`};
+ }
+ preset(name:string):Result {return {message:`Apply ${name} layout? Wording stays the same. Headings and paragraph styles will change throughout the document.`,pending:()=>{
+ this.editor.view.dispatch(closeHistory(this.editor.state.tr));const tr=this.editor.state.tr;const legal=/legal|academic/.test(name),letter=/letter/.test(name);tr.doc.descendants((n,p)=>{if(n.type.name==='heading')tr.setNodeMarkup(p,undefined,{...n.attrs,textAlign:'left',lineSpacing:'1.2',spaceAfter:'12pt'});if(n.type.name==='paragraph')tr.setNodeMarkup(p,undefined,{...n.attrs,textAlign:legal?'justify':'left',lineSpacing:letter?'1.15':legal?'2':'1.5',spaceAfter:'8pt'});});tr.addMark(0,tr.doc.content.size,this.editor.schema.marks.textStyle.create({fontFamily:legal?'Times New Roman':'Arial',fontSize:'12pt'}));this.editor.view.dispatch(tr);return {message:`${name} layout applied. Undo is available.`};}};}
+ execute(input:string,confirmed=false):Result {
+ try {const text=input.trim().replace(/[.!?]+$/,'');if(!text)throw Error('Enter or say an instruction.');this.lastText=input;
+ if(/^find all occurrences of .+ and highlight (?:them|all matches)$/i.test(text)){const phrase=text.replace(/^find all occurrences of /i,'').replace(/ and highlight (?:them|all matches)$/i,'');const found=this.find(phrase,true);if(found.message.includes('possible'))return found;const ranges=[...this.matches];return {message:`Highlight all ${ranges.length} exact matches?`,pending:()=>{const tr=this.editor.state.tr;for(const r of ranges)tr.addMark(r.from,r.to,this.editor.schema.marks.highlight.create({color:'#fff0a3'}));this.editor.view.dispatch(closeHistory(tr));return {message:`Highlighted ${ranges.length} matches.`};}};}
+ // Split only at action boundaries; do not split ordinary target wording.
+ const parts=text.split(/(?:,\s*|\s+and\s+|\s+then\s+)(?=(?:make|bold|underline|italicise|italicize|highlight|centre|center|align|insert|go to|select)\b)/i);
+ if(parts.length>1){const before=this.editor.state;let messages:string[]=[];try{for(const p of parts){const r=this.execute(p,confirmed);if(r.pending||/could not|first|Several|No match|don't recognise|does not|possible passage/i.test(r.message)){this.editor.view.updateState(before);return r.pending?{message:'Run this confirmation-requiring action separately.'}:r;}messages.push(r.message);}return {message:messages.join(' '),matches:this.matches};}catch(err){this.editor.view.updateState(before);throw err;}}
+ const t=text.toLowerCase();const e=this.editor;let m:RegExpExecArray|null;
+ if(/^(undo|undo that|undo the last change)$/.test(t))return {message:e.commands.undo()?'Last change undone.':'Nothing to undo.'};
+ if(/^(redo|redo that)$/.test(t))return {message:e.commands.redo()?'Change restored.':'Nothing to redo.'};
+ if(/^(next|previous) result$/.test(t))return this.show(this.index+(t.startsWith('next')?1:-1));
+ if(t==='show all matches')return {message:`${this.matches.length} matches.`,matches:this.matches};
+ if(t==='return to where i was'){if(!this.previous)throw Error('There is no previous location.');this.select(this.previous);return {message:'Returned to your previous location.'};}
+ if(/^(go to (?:the )?|)(beginning|end|start)$/.test(t)){const end=t.endsWith('end');this.select({from:end?e.state.doc.content.size-1:1,to:end?e.state.doc.content.size-1:1});return {message:end?'At the end.':'At the beginning.'};}
+ if(m=/^go to (?:the )?(next|previous) (heading|paragraph)$/.exec(t)){const a=this.blocks(m[2]==='heading'?'heading':undefined),pos=e.state.selection.from;const r=m[1]==='next'?a.find(b=>b.from>pos):a.filter(b=>b.from<pos).at(-1);if(!r)throw Error(`No ${m[1]} ${m[2]}.`);this.select(r);return {message:`Selected ${m[1]} ${m[2]}.`};}
+ if(m=/^(?:find|go to|select) (?:the )?(paragraph|heading) beginning (?:with )?(.+)$/i.exec(text)){this.select(this.target(`${m[1]} beginning with ${m[2]}`));return {message:`Selected matching ${m[1]}.`};}
+ if(m=/^(find|go to) (?:all occurrences of )?(.+)$/i.exec(text))return this.find(m[2],/all occurrences/i.test(text));
+ if(m=/^select (.+)$/i.exec(text)){this.select(this.target(m[1]));return {message:'Passage selected.'};}
+ if(m=/^(?:apply |format (?:this|the document) as (?:a )?)(professional(?: document| formatting)?|business letter|academic(?: document)?|formal report(?: layout)?|legal(?: document)?)$/i.exec(text))return this.preset(m[1]);
+ if(/^(make all (?:the )?headings consistent|standardise (?:the )?paragraph spacing|correct (?:the )?numbering|remove unnecessary blank lines|make all (?:the )?headings bold|find all occurrences of .+ and highlight them)$/.test(t)){
+ const apply=():Result=>{const tr=e.state.tr;const remove:Range[]=[];tr.doc.descendants((n,p)=>{if(t.includes('headings')&&n.type.name==='heading'){if(t.endsWith('bold'))tr.addMark(p+1,p+n.nodeSize-1,e.schema.marks.bold.create());else tr.setNodeMarkup(p,undefined,{...n.attrs,textAlign:'left',lineSpacing:'1.2',spaceAfter:'12pt'});}if(t.includes('spacing')&&n.type.name==='paragraph')tr.setNodeMarkup(p,undefined,{...n.attrs,lineSpacing:'1.5',spaceAfter:'8pt'});if(t.includes('blank lines')&&n.type.name==='paragraph'&&!n.textContent&&p>0)remove.push({from:p,to:p+n.nodeSize});if(t.includes('numbering')&&n.type.name==='orderedList')tr.setNodeMarkup(p,undefined,{...n.attrs,start:1});});for(const r of remove.reverse())tr.delete(r.from,r.to);e.view.dispatch(closeHistory(tr));return {message:'Document-wide formatting applied. Undo is available.'};};return confirmed?apply():{message:`${text}? This affects the whole document.`,pending:apply};}
+ if(m=/^(?:replace all(?: occurrences of)?|replace) (.+?) with (.+)$/i.exec(text)){const old=clean(m[1]),replacement=clean(m[2]),all=/^replace all/i.test(text);const selected={from:e.state.selection.from,to:e.state.selection.to};this.find(old,true);if(this.matches.some(r=>norm(e.state.doc.textBetween(r.from,r.to,''))!==norm(old)))throw Error('No exact replacement target. Approximate results are for navigation only.');const ranges=all?[...this.matches]:[this.matches[this.index]];if(!all&&this.matches.length>1){const r=this.matches.find(r=>r.from===selected.from&&r.to===selected.to);if(r)ranges[0]=r;}
+ const apply=()=>{const tr=e.state.tr;for(const r of [...ranges].reverse()){const marks=tr.doc.resolve(r.from).marks();tr.replaceWith(r.from,r.to,e.schema.text(replacement,marks));}e.view.dispatch(closeHistory(tr));this.matches=[];return {message:`Replaced ${ranges.length} occurrence${ranges.length===1?'':'s'}. Undo is available.`};};return all||this.matches.length>1?{message:`Replace ${all?'all '+ranges.length:'one of '+this.matches.length} occurrence(s) of “${old}” with “${replacement}”?`,pending:apply}:apply();}
+ if(m=/^move (?:the )?(?:paragraph (\w+)|([\w]+) paragraph) (above|below) (?:the )?(?:(?:paragraph|heading) (\w+)|(\w+) (paragraph|heading))$/i.exec(text)){
+ const source=this.target('paragraph '+(m[1]||m[2]));const dest=this.target((m[6]||'paragraph')+' '+(m[4]||m[5]));if(source.from===dest.from)throw Error('Those are the same paragraph.');const apply=()=>{const start=source.from-1,end=source.to+1;const node=e.state.doc.nodeAt(start);if(!node)throw Error('Paragraph not found.');const tr=e.state.tr;tr.delete(start,end);const pos=m![3]==='above'?dest.from-1:dest.to+1;tr.insert(tr.mapping.map(pos),node);e.view.dispatch(closeHistory(tr));return {message:'Paragraph moved. Undo is available.'};};return {message:'Move this paragraph? Document order will change.',pending:apply};}
+ if(m=/^delete (.+)$/i.exec(text)){const r=this.target(m[1]);return {message:`Delete “${e.state.doc.textBetween(r.from,r.to,' ').slice(0,100)}”?`,pending:()=>{e.commands.deleteRange(r);return {message:'Text deleted. Undo is available.'};}};}
+ if(/^copy (?:the )?selected text$/i.test(text)){const s=e.state.selection;if(s.empty)throw Error('Select text to copy.');this.clipboard=e.state.doc.slice(s.from,s.to);return {message:'Selection copied inside Josefa. Use Paste or a paste command.'};}
+ if(m=/^paste(?: after (?:the )?(.+))?$/i.exec(text)){if(!this.clipboard)throw Error('Copy text inside Josefa first, or use your device’s Paste.');let pos=e.state.selection.to;if(m[1])pos=this.target(m[1]).to;const tr=e.state.tr.replaceRange(pos,pos,this.clipboard);e.view.dispatch(tr);return {message:'Copied content pasted.'};}
+ if(/^insert (?:a )?new paragraph$/i.test(text)){e.commands.insertContent({type:'paragraph'});return {message:'Paragraph inserted.'};}
+ if(m=/^insert (?:the |a )?heading (.+)$/i.exec(text)){e.commands.insertContent({type:'heading',attrs:{level:2},content:[{type:'text',text:m[1]}]});return {message:'Heading inserted.'};}
+ if(m=/^insert (?:a )?page break(?: before (.+))?$/i.exec(text)){if(m[1]){const r=this.target(m[1]);e.commands.insertContentAt(Math.max(0,r.from-1),{type:'pageBreak'});}else e.commands.insertContent({type:'pageBreak'});return {message:'Page break inserted.'};}
+ if(m=/^(?:remove|clear) (?:the )?(bold|underline|italics?|highlight)(?: from (.+))?$/i.exec(text)){const r=this.target(m[2]||'it');this.select(r);const cmd:any={bold:'unsetBold',underline:'unsetUnderline',italic:'unsetItalic',italics:'unsetItalic',highlight:'unsetHighlight'}; (e.commands as any)[cmd[m[1].toLowerCase()]]();return {message:'Formatting removed.'};}
+ if(m=/^(?:change|set|make) (.+?) (?:to )?font size (.+)$/i.exec(text)){const r=this.target(m[1]);const n=number(m[2].toLowerCase());if(!n||n<6||n>96)throw Error('Choose a font size from 6 to 96.');this.select(r);e.commands.setFontSize(n+'pt');return {message:`Font size set to ${n}.`};}
+ if(m=/^(?:centre|center|align) (.+?)(?: (?:to (?:the )?)?(left|right|centre|center|justified|justify))?$/i.exec(text)){const r=this.target(m[1]);this.select(r);const align=m[2]||'center';e.commands.setTextAlign(align==='centre'?'center':align==='justified'?'justify':align);return {message:'Paragraph alignment updated.'};}
+ if(m=/^(?:apply|set) (double|single|1\.5) spacing$/i.exec(text)){const r=this.target('this paragraph');this.select(r);e.commands.updateAttributes('paragraph',{lineSpacing:m[1]==='double'?'2':m[1]==='single'?'1':'1.5'});e.commands.updateAttributes('heading',{lineSpacing:m[1]==='double'?'2':m[1]==='single'?'1':'1.5'});return {message:'Line spacing updated.'};}
+ if(m=/^(indent|outdent) (.+)$/i.exec(text)){const r=this.target(m[2]);this.select(r);const tr=e.state.tr;tr.doc.nodesBetween(r.from,r.to,(n,p)=>{if(n.isTextblock)tr.setNodeMarkup(p,undefined,{...n.attrs,indent:Math.max(0,Math.min(8,(n.attrs.indent||0)+(m![1]==='indent'?1:-1)))});});e.view.dispatch(tr);return {message:'Paragraph indentation updated.'};}
+ if(m=/^(?:make|set) (.+?) (bold|italic|italics|underlined|underline|uppercase|highlighted)$/i.exec(text))return this.format(({italics:'italic',underlined:'underline',highlighted:'highlight'} as any)[m[2].toLowerCase()]||m[2].toLowerCase(),m[1]);
+ if(m=/^(bold|italicise|italicize|underline|highlight|strikethrough) (.+)$/i.exec(text))return this.format(({italicise:'italic',italicize:'italic',strikethrough:'strike'} as any)[m[1].toLowerCase()]||m[1].toLowerCase(),m[2]);
+ throw Error('I don’t recognise that instruction. Try “Find witness statement”, “Make it bold” or open the command guide.');
+ }catch(err){return {message:err instanceof Error?err.message:String(err)};}
+ }
+}

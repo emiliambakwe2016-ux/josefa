@@ -1,0 +1,27 @@
+import { beforeEach, afterEach, describe, it, expect } from 'vitest';
+import { makeEditor } from '../src/editor';
+import { CommandEngine } from '../src/commands';
+import type { Editor } from '@tiptap/core';
+let editor:Editor,engine:CommandEngine;
+beforeEach(()=>{document.body.innerHTML='<div id="editor"></div>';editor=makeEditor(document.getElementById('editor')!,'<h1>Witness Statement</h1><p>The claimant claims an outstanding payment.</p><p>The claimant alleges negligence.</p><h2>Conclusion</h2><p>Further negligence was proved.</p>');engine=new CommandEngine(editor);});
+afterEach(()=>editor.destroy());
+describe('actual structured document commands',()=>{
+it('finds an exact phrase and formats only that text',()=>{engine.execute('Find witness statement');engine.execute('Make it bold');expect(editor.getHTML()).toContain('<strong>Witness Statement</strong>');expect(editor.getHTML()).not.toContain('<strong>The claimant');});
+it('context alignment uses selected heading',()=>{engine.execute('Find witness statement');engine.execute('Centre it');expect(editor.getJSON().content![0].attrs!.textAlign).toBe('center');});
+it('formats numbered paragraph',()=>{engine.execute('Italicise the second paragraph');expect(editor.getHTML()).toContain('<em>The claimant alleges negligence.</em>');});
+it('combines compatible commands',()=>{const r=engine.execute('Find witness statement, make it bold and centre the heading');expect(r.message).not.toContain('first');expect(editor.getHTML()).toContain('<strong>Witness Statement</strong>');expect(editor.getJSON().content![0].attrs!.textAlign).toBe('center');});
+it('rejects ambiguous target formatting',()=>{const r=engine.execute('Bold negligence');expect(r.message).toContain('Several');expect(editor.getHTML()).not.toContain('<strong>negligence</strong>');});
+it('suggests approximate passages without selecting arbitrary targets',()=>{const r=engine.execute('Find where I discussed outstanding payment');expect(r.message).toContain('possible');expect(r.matches?.[0].label).toContain('outstanding payment');});
+it('replacement changes one exact occurrence and is undoable',()=>{engine.execute('Replace outstanding payment with unpaid balance');expect(editor.getText()).toContain('unpaid balance');expect(editor.getText()).not.toContain('outstanding payment');engine.execute('Undo');expect(editor.getText()).toContain('outstanding payment');engine.execute('Redo');expect(editor.getText()).toContain('unpaid balance');});
+it('replace all requires confirmation and preserves unrelated text',()=>{const r=engine.execute('Replace all claimant with applicant');expect(r.pending).toBeTypeOf('function');expect(editor.getText()).not.toContain('applicant');r.pending!();expect(editor.getText()).not.toContain('claimant');expect(editor.getText().match(/applicant/g)).toHaveLength(2);expect(editor.getText()).toContain('Conclusion');});
+it('deleting a selected sentence requires confirmation',()=>{engine.execute('Find outstanding payment');const r=engine.execute('Delete the selected sentence');expect(r.pending).toBeTypeOf('function');r.pending!();expect(editor.getText()).not.toContain('outstanding payment');engine.execute('Undo');expect(editor.getText()).toContain('outstanding payment');});
+it('moves whole paragraphs through transactions',()=>{const r=engine.execute('Move paragraph two above paragraph one');r.pending!();expect(editor.getJSON().content![1].content![0].text).toContain('alleges negligence');engine.execute('Undo');expect(editor.getJSON().content![1].content![0].text).toContain('outstanding payment');});
+it('presets require confirmation and preserve wording',()=>{const text=editor.getText();engine.preset('legal document').pending!();expect(editor.getText()).toBe(text);expect(editor.getJSON().content![1].attrs!.lineSpacing).toBe('2');});
+it('navigation and returning retain actual selections',()=>{engine.execute('Go to the end');engine.execute('Go to the beginning');engine.execute('Go to the next heading');expect(editor.state.doc.textBetween(editor.state.selection.from,editor.state.selection.to)).toBe('Conclusion');});
+it('find all, next result and highlight all',()=>{engine.execute('Find all occurrences of negligence');expect(engine.matches).toHaveLength(2);engine.execute('Next result');expect(editor.state.selection.from).toBe(engine.matches[1].from);});
+it('uses internal structured clipboard',()=>{engine.execute('Find outstanding payment');engine.execute('Copy the selected text');engine.execute('Go to the end');engine.execute('Paste');expect(editor.getText().match(/outstanding payment/g)).toHaveLength(2);});
+it('inserts heading and page break',()=>{engine.execute('Go to the end');engine.execute('Insert the heading Particulars of Negligence');expect(editor.getHTML()).toContain('<h2>Particulars of Negligence</h2>');engine.execute('Insert a page break before Conclusion');expect(editor.getJSON().content!.some(n=>n.type==='pageBreak')).toBe(true);});
+it('handles unsupported input and missing targets',()=>{expect(engine.execute('Do magic').message).toContain('don’t recognise');expect(engine.execute('Find missingxyz').message).toContain('No match');});
+it('sets spoken numeric font sizes',()=>{engine.execute('Find witness statement');engine.execute('Change the selected text to font size fourteen');expect(editor.getHTML()).toContain('font-size: 14pt');});
+it('does not edit approximate replacement targets',()=>{const before=editor.getText();engine.execute('Replace outstanding debt payment with money');expect(editor.getText()).toBe(before);});
+});
