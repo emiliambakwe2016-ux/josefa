@@ -35,6 +35,8 @@ Deploy the production `dist` folder with the supplied Wrangler configuration, e.
 
 ## Verification
 
+Latest targeted correction: [Heading navigation and combined commands — 1.0.1](docs/HEADING_FIX.md).
+
 Live application: https://josefa.startright.ng · [Verification details](docs/VERIFICATION.md)
 
 

@@ -8,3 +8,5 @@
 @media print{.rail,.topbar,.toolbar,#extra-tools,.assistant,#outline,.command-dock,.statusbar,.page-note{display:none!important}main{margin:0;width:100%}#editor-screen{height:auto}.workspace,.paper-scroll{display:block;overflow:visible;padding:0;background:white}.paper{box-shadow:none;border:0;padding:0;max-width:none;min-height:0;color:#000;background:#fff}.tiptap{min-height:0}.page-break{break-after:page}.page-break:after{display:none}}
 
 #mobile-share{display:none}@media(max-width:950px){#mobile-share{display:inline-flex}}
+
+.match-list button strong,.match-list button span,.match-list button small{display:block}.match-list button strong{font-weight:500}.match-list button span{font-size:10px;color:var(--accent);margin-top:4px}.match-list button small{font-size:10px;line-height:1.5;margin-top:3px}.match-list button{min-height:60px}
