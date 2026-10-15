@@ -35,4 +35,7 @@ Deploy the production `dist` folder with the supplied Wrangler configuration, e.
 
 ## Verification
 
+Live application: https://josefa.startright.ng · [Verification details](docs/VERIFICATION.md)
+
+
 Unit/integration tests check actual ProseMirror state changes and independent Word parsing using Mammoth. Playwright tests cover create/edit/save/reload/reopen/export, Word import including tables/lists/alignment, contextual actions, undo/redo, a 1,500-paragraph document, unavailable microphone, separate dictation, responsive sizes (320 through 1440 px), dark mode, and document management.
